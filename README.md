@@ -28,7 +28,7 @@ bun test
 bun run deploy
 ```
 
-初回はbaseline保存のみで通知しません。2回目以降、正規化した`<main>`のSHA-256が変わった場合だけKVを更新し、ntfyへ1回通知します。サイトのHTTPエラー、timeout、HTML解析失敗時はKVを上書きしません。
+初回はbaseline保存のみで通知しません。2回目以降、正規化した`<main>`のSHA-256が変わった場合は、まずKVを最新状態へ更新してからntfyへ1回通知します。同じ変更を再送しません。サイトのHTTPエラー、timeout、HTML解析失敗時はKVを上書きしません。ntfyが失敗した場合も、エラー内容をWorkers Logsへ出力します。
 
 Cronは動作確認用に毎分です。完成後に`amatatu.com`を実際に変更すると、次回のCronで変更を検知して通知します。
 
