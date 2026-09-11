@@ -7,6 +7,6 @@
 	"kv_namespaces": [
 		{ "binding": "WATCH_STATE", "id": "b6dc5a4eb20f4285975cd8f943ced393" }
 	],
-	"triggers": { "crons": ["* * * * *"] },
+	"triggers": { "crons": ["0 0 * * *"] },
 	"upload_source_maps": true
 }
