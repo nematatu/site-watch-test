@@ -1,40 +1,121 @@
-/**
- * Welcome to Cloudflare Workers!
- *
- * This is a template for a Scheduled Worker: a Worker that can run on a
- * configurable interval:
- * https://developers.cloudflare.com/workers/platform/triggers/cron-triggers/
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Run `curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"` to see your Worker in action
- * - Run `npm run deploy` to publish your Worker
- *
- * Bind resources to your Worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+const TARGET_URL = "https://amatatu.com/";
+const STATE_KEY = "site:v2:https://amatatu.com/";
+const FETCH_TIMEOUT_MS = 15_000;
+
+export type Snapshot = { version: 1; url: string; hash: string; content: string; checkedAt: string };
+export type CheckResult = {
+	status: "baseline" | "unchanged" | "changed";
+	url: string;
+	checkedAt: string;
+	hash: string;
+	previousHash: string | null;
+	contentLength: number;
+	notified: boolean;
+};
+
+export function normalizeText(value: string): string {
+	return value.replace(/[\s\u3000]+/gu, " ").trim();
+}
+
+export async function sha256(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function extractMainText(response: Response): Promise<string> {
+	let found = false;
+	let text = "";
+	await new HTMLRewriter()
+		.on("main", {
+			element() { found = true; },
+			text(chunk) { text += chunk.text; },
+		})
+		.transform(response)
+		.arrayBuffer();
+	const normalized = normalizeText(text);
+	if (!found) throw new Error("main element not found");
+	if (!normalized) throw new Error("main element is empty");
+	return normalized;
+}
+
+async function fetchSnapshot(): Promise<Snapshot> {
+	const response = await fetch(TARGET_URL, {
+		headers: { "User-Agent": "site-watch-test/1.0 (+Cloudflare Workers)" },
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+	});
+	if (!response.ok) throw new Error(`target HTTP ${response.status} ${response.statusText}`);
+	const contentType = response.headers.get("content-type") ?? "";
+	if (!contentType.toLowerCase().includes("text/html")) throw new Error(`unexpected content-type: ${contentType || "missing"}`);
+	const content = await extractMainText(response);
+	return { version: 1, url: TARGET_URL, hash: await sha256(content), content, checkedAt: new Date().toISOString() };
+}
+
+async function sendNotification(topic: string, token: string | undefined, snapshot: Snapshot, previous: Snapshot): Promise<void> {
+	const headers: Record<string, string> = {
+		Title: encodeURIComponent("ポートフォリオサイト更新検知"),
+		Click: TARGET_URL,
+		Tags: "computer,white_check_mark",
+		"Content-Type": "text/plain; charset=utf-8",
+	};
+	if (token) headers.Authorization = `Bearer ${token}`;
+	const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+		method: "POST",
+		headers,
+		body: ["amatatu.com の表示内容が更新されました。", "", `変更前: ${previous.hash.slice(0, 12)}`, `変更後: ${snapshot.hash.slice(0, 12)}`, `確認日時: ${snapshot.checkedAt}`].join("\n"),
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!response.ok) throw new Error(`ntfy HTTP ${response.status} ${response.statusText}`);
+}
+
+export async function checkSite(env: Env): Promise<CheckResult> {
+	const snapshot = await fetchSnapshot();
+	const previous = await env.WATCH_STATE.get<Snapshot>(STATE_KEY, "json");
+	if (!previous) {
+		await env.WATCH_STATE.put(STATE_KEY, JSON.stringify(snapshot));
+		return makeResult("baseline", snapshot, null, false);
+	}
+	if (previous.hash === snapshot.hash) return makeResult("unchanged", snapshot, previous, false);
+	await sendNotification(env.NTFY_TOPIC, env.NTFY_TOKEN, snapshot, previous);
+	await env.WATCH_STATE.put(STATE_KEY, JSON.stringify(snapshot));
+	return makeResult("changed", snapshot, previous, true);
+}
+
+function makeResult(status: CheckResult["status"], current: Snapshot, previous: Snapshot | null, notified: boolean): CheckResult {
+	return { status, url: current.url, checkedAt: current.checkedAt, hash: current.hash, previousHash: previous?.hash ?? null, contentLength: current.content.length, notified };
+}
+
+function json(data: unknown, status = 200): Response {
+	return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+function isAuthorized(request: Request, env: Env): boolean {
+	return Boolean(env.MANUAL_TRIGGER_TOKEN) && request.headers.get("Authorization") === `Bearer ${env.MANUAL_TRIGGER_TOKEN}`;
+}
 
 export default {
-	async fetch(req) {
-		const url = new URL(req.url);
-		url.pathname = '/__scheduled';
-		url.searchParams.append('cron', '* * * * *');
-		return new Response(`To test the scheduled handler, ensure you have used the "--test-scheduled" then try running "curl ${url.href}".`);
+	async fetch(request, env): Promise<Response> {
+		const url = new URL(request.url);
+		if (request.method === "GET" && url.pathname === "/") {
+			const state = await env.WATCH_STATE.get<Snapshot>(STATE_KEY, "json");
+			return json({ status: "ok", service: "site-watch-test", target: TARGET_URL, snapshotUpdatedAt: state?.checkedAt ?? null, currentHash: state?.hash ?? null });
+		}
+		if (request.method === "POST" && url.pathname === "/check") {
+			if (!isAuthorized(request, env)) return json({ status: "error", error: "unauthorized" }, 401);
+			try {
+				const check = await checkSite(env);
+				console.log("site check completed", check);
+				return json(check);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error("site check failed", { url: TARGET_URL, error: message });
+				return json({ status: "error", url: TARGET_URL, error: message }, 502);
+			}
+		}
+		return json({ status: "error", error: "not found" }, 404);
 	},
-
-	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
-	// [[triggers]] configuration.
-	async scheduled(event, env, ctx): Promise<void> {
-		// A Cron Trigger can make requests to other endpoints on the Internet,
-		// publish to a Queue, query a D1 Database, and much more.
-		//
-		// We'll keep it simple and make an API call to a Cloudflare API:
-		let resp = await fetch('https://api.cloudflare.com/client/v4/ips');
-		let wasSuccessful = resp.ok ? 'success' : 'fail';
-
-		// You could store this result in KV, write to a D1 Database, or publish to a Queue.
-		// In this template, we'll just log the result:
-		console.log(`trigger fired at ${event.cron}: ${wasSuccessful}`);
+	async scheduled(controller, env, ctx): Promise<void> {
+		ctx.waitUntil(checkSite(env)
+			.then((check) => console.log("site check completed", { ...check, cron: controller.cron }))
+			.catch((error) => console.error("site check failed", { url: TARGET_URL, cron: controller.cron, error: error instanceof Error ? error.message : String(error) })));
 	},
 } satisfies ExportedHandler<Env>;
