@@ -18,7 +18,7 @@ bunx wrangler login
 bunx wrangler kv namespace create WATCH_STATE
 ```
 
-作成されたIDを`wrangler.jsonc`の`REPLACE_WITH_KV_NAMESPACE_ID`へ設定します。続いてSecretを登録します。
+作成されたIDを`wrangler.jsonc`の`kv_namespaces[].id`へ設定します。続いてSecretを登録します。
 
 ```bash
 bunx wrangler secret put NTFY_TOPIC
@@ -28,7 +28,7 @@ bun test
 bun run deploy
 ```
 
-初回はbaseline保存のみで通知しません。2回目以降、正規化した`<main>`のSHA-256が変わった場合だけ通知し、ntfy成功後にKVを更新します。HTTPエラー、timeout、HTML解析失敗、ntfy失敗時は正常なKVを上書きしません。
+初回はbaseline保存のみで通知しません。2回目以降、正規化した`<main>`のSHA-256が変わった場合だけ通知し、ntfy成功後にKVを更新します。HTTPエラー、timeout、HTML解析失敗、ntfy失敗時はKVを上書きしません。
 
 Cronは動作確認用に毎分です。完成後に`amatatu.com`を実際に変更すると、次回のCronで変更を検知して通知します。
 
