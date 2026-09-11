@@ -28,7 +28,7 @@ bun test
 bun run deploy
 ```
 
-初回はbaseline保存のみで通知しません。2回目以降、正規化した`<main>`のSHA-256が変わった場合だけ通知し、ntfy成功後にKVを更新します。HTTPエラー、timeout、HTML解析失敗、ntfy失敗時はKVを上書きしません。
+初回はbaseline保存のみで通知しません。2回目以降、正規化した`<main>`のSHA-256が変わった場合だけKVを更新し、ntfyへ1回通知します。サイトのHTTPエラー、timeout、HTML解析失敗時はKVを上書きしません。
 
 Cronは動作確認用に毎分です。完成後に`amatatu.com`を実際に変更すると、次回のCronで変更を検知して通知します。
 
@@ -38,6 +38,6 @@ Cronの判定結果は次のいずれかです。
 
 - `baseline`: 初回状態をKVへ保存。通知なし。
 - `unchanged`: 前回と同じ。通知・KV書き込みなし。
-- `changed`: 更新を検知し、ntfy成功後にKVを更新。
+- `changed`: 更新通知に成功。
 
 判定結果はWorkers Logsへ構造化出力します。

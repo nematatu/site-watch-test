@@ -1,7 +1,6 @@
 const TARGET_URL = "https://amatatu.com/";
 const STATE_KEY = "site:v2:https://amatatu.com/";
 const FETCH_TIMEOUT_MS = 15_000;
-
 type Snapshot = { version: 1; hash: string; checkedAt: string };
 type CheckStatus = "baseline" | "unchanged" | "changed";
 
@@ -69,8 +68,8 @@ async function checkSite(env: Env): Promise<CheckStatus> {
 		return "baseline";
 	}
 	if (previous.hash === snapshot.hash) return "unchanged";
-	await sendNotification(env.NTFY_TOPIC, snapshot.checkedAt);
 	await env.WATCH_STATE.put(STATE_KEY, JSON.stringify(snapshot));
+	await sendNotification(env.NTFY_TOPIC, snapshot.checkedAt);
 	return "changed";
 }
 
@@ -80,7 +79,12 @@ export default {
 		if (request.method === "GET" && url.pathname === "/") {
 			const state = await env.WATCH_STATE.get<Snapshot>(STATE_KEY, "json");
 			return Response.json(
-				{ status: "ok", service: "site-watch-test", target: TARGET_URL, baselineUpdatedAt: state ? formatJst(state.checkedAt) : null },
+				{
+					status: "ok",
+					service: "site-watch-test",
+					target: TARGET_URL,
+					baselineUpdatedAt: state ? formatJst(state.checkedAt) : null,
+				},
 				{ headers: { "Cache-Control": "no-store" } },
 			);
 		}
