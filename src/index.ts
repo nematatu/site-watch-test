@@ -50,14 +50,13 @@ async function fetchSnapshot(): Promise<Snapshot> {
 	return { version: 1, url: TARGET_URL, hash: await sha256(content), content, checkedAt: new Date().toISOString() };
 }
 
-async function sendNotification(topic: string, token: string | undefined, snapshot: Snapshot, previous: Snapshot): Promise<void> {
+async function sendNotification(topic: string, snapshot: Snapshot, previous: Snapshot): Promise<void> {
 	const headers: Record<string, string> = {
 		Title: encodeURIComponent("ポートフォリオサイト更新検知"),
 		Click: TARGET_URL,
 		Tags: "computer,white_check_mark",
 		"Content-Type": "text/plain; charset=utf-8",
 	};
-	if (token) headers.Authorization = `Bearer ${token}`;
 	const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
 		method: "POST",
 		headers,
@@ -75,7 +74,7 @@ export async function checkSite(env: Env): Promise<CheckResult> {
 		return makeResult("baseline", snapshot, null, false);
 	}
 	if (previous.hash === snapshot.hash) return makeResult("unchanged", snapshot, previous, false);
-	await sendNotification(env.NTFY_TOPIC, env.NTFY_TOKEN, snapshot, previous);
+	await sendNotification(env.NTFY_TOPIC, snapshot, previous);
 	await env.WATCH_STATE.put(STATE_KEY, JSON.stringify(snapshot));
 	return makeResult("changed", snapshot, previous, true);
 }
@@ -88,28 +87,12 @@ function json(data: unknown, status = 200): Response {
 	return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-function isAuthorized(request: Request, env: Env): boolean {
-	return Boolean(env.MANUAL_TRIGGER_TOKEN) && request.headers.get("Authorization") === `Bearer ${env.MANUAL_TRIGGER_TOKEN}`;
-}
-
 export default {
 	async fetch(request, env): Promise<Response> {
 		const url = new URL(request.url);
 		if (request.method === "GET" && url.pathname === "/") {
 			const state = await env.WATCH_STATE.get<Snapshot>(STATE_KEY, "json");
 			return json({ status: "ok", service: "site-watch-test", target: TARGET_URL, snapshotUpdatedAt: state?.checkedAt ?? null, currentHash: state?.hash ?? null });
-		}
-		if (request.method === "POST" && url.pathname === "/check") {
-			if (!isAuthorized(request, env)) return json({ status: "error", error: "unauthorized" }, 401);
-			try {
-				const check = await checkSite(env);
-				console.log("site check completed", check);
-				return json(check);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				console.error("site check failed", { url: TARGET_URL, error: message });
-				return json({ status: "error", url: TARGET_URL, error: message }, 502);
-			}
 		}
 		return json({ status: "error", error: "not found" }, 404);
 	},
